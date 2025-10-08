@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sukebei Size and Chinese Name Filter
 // @namespace    http://tampermonkey.net/
-// @version      3.0
+// @version      4.0
 // @description  自定义过滤大小和中文字符占比的过滤器，支持面板显示/隐藏切换
 // @author       qisexin
 // @license      MIT
@@ -14,36 +14,50 @@
 
     // 将大小字符串转换为MB数值
     function convertSizeToMB(sizeStr) {
-        // 提取数值和单位
-        const match = sizeStr.match(/^([\d.]+)\s*([A-Za-z]+)$/);
-        if (!match) return 0;
-        
-        const value = parseFloat(match[1]);
-        const unit = match[2].toUpperCase();
-        
-        // 根据单位转换为MB
-        switch(unit) {
-            case 'B':
-                return value / (1024 * 1024);
-            case 'KIB':
-            case 'KB':
-                return value / 1024;
-            case 'MIB':
-            case 'MB':
-                return value;
-            case 'GIB':
-            case 'GB':
-                return value * 1024;
-            case 'TIB':
-            case 'TB':
-                return value * 1024 * 1024;
-            default:
-                return 0;
+        try {
+            if (!sizeStr || typeof sizeStr !== 'string') return 0;
+            
+            // 提取数值和单位
+            const match = sizeStr.match(/^([\d.]+)\s*([A-Za-z]+)$/);
+            if (!match) return 0;
+            
+            const value = parseFloat(match[1]);
+            if (isNaN(value)) return 0;
+            
+            const unit = match[2].toUpperCase();
+            
+            // 根据单位转换为MB
+            switch(unit) {
+                case 'B':
+                    return value / (1024 * 1024);
+                case 'KIB':
+                case 'KB':
+                    return value / 1024;
+                case 'MIB':
+                case 'MB':
+                    return value;
+                case 'GIB':
+                case 'GB':
+                    return value * 1024;
+                case 'TIB':
+                case 'TB':
+                    return value * 1024 * 1024;
+                default:
+                    return 0;
+            }
+        } catch (e) {
+            console.warn('转换大小时出错:', e, 'Input:', sizeStr);
+            return 0;
         }
     }
 
     // 检测字符串中中文字符占比是否超过指定阈值
-    function isPredominantlyChinese(str, threshold = chineseRatioThreshold) {
+    function isPredominantlyChinese(str, threshold) {
+        // 如果没有提供阈值，使用当前的全局阈值
+        if (threshold === undefined) {
+            threshold = chineseRatioThreshold;
+        }
+        
         // 中文字符范围：基本汉字、扩展A区汉字、兼容汉字
         const chineseRegex = /[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff]/;
         
@@ -101,32 +115,42 @@
                 chineseFilterActive = settings.chineseFilterActive !== undefined ? settings.chineseFilterActive : true;
                 panelVisible = settings.panelVisible !== undefined ? settings.panelVisible : true;
                 
-                // 更新输入框的值
-                sizeInput.value = minSizeMB;
-                chineseInput.value = Math.round(chineseRatioThreshold * 100);
-                
-                // 更新按钮状态
-                if (sizeFilterActive) {
-                    sizeToggleButton.textContent = '关闭大小过滤';
-                    sizeToggleButton.style.backgroundColor = '#4CAF50';
-                } else {
-                    sizeToggleButton.textContent = '开启大小过滤';
-                    sizeToggleButton.style.backgroundColor = '#9E9E9E';
+                // 确保DOM元素存在后再更新它们的值
+                if (sizeInput) {
+                    sizeInput.value = minSizeMB;
+                }
+                if (chineseInput) {
+                    chineseInput.value = Math.round(chineseRatioThreshold * 100);
                 }
                 
-                if (chineseFilterActive) {
-                    chineseToggleButton.textContent = '关闭中文过滤';
-                    chineseToggleButton.style.backgroundColor = '#2196F3';
-                } else {
-                    chineseToggleButton.textContent = '开启中文过滤';
-                    chineseToggleButton.style.backgroundColor = '#9E9E9E';
+                // 更新按钮状态
+                if (sizeToggleButton) {
+                    if (sizeFilterActive) {
+                        sizeToggleButton.textContent = '关闭大小过滤';
+                        sizeToggleButton.style.backgroundColor = '#4CAF50';
+                    } else {
+                        sizeToggleButton.textContent = '开启大小过滤';
+                        sizeToggleButton.style.backgroundColor = '#9E9E9E';
+                    }
+                }
+                
+                if (chineseToggleButton) {
+                    if (chineseFilterActive) {
+                        chineseToggleButton.textContent = '关闭中文过滤';
+                        chineseToggleButton.style.backgroundColor = '#2196F3';
+                    } else {
+                        chineseToggleButton.textContent = '开启中文过滤';
+                        chineseToggleButton.style.backgroundColor = '#9E9E9E';
+                    }
                 }
                 
                 // 更新面板可见性
-                if (panelVisible) {
-                    controlPanel.style.display = 'block';
-                } else {
-                    controlPanel.style.display = 'none';
+                if (controlPanel) {
+                    if (panelVisible) {
+                        controlPanel.style.display = 'block';
+                    } else {
+                        controlPanel.style.display = 'none';
+                    }
                 }
                 
                 // 更新按钮可见性
@@ -142,57 +166,68 @@
     
     // 过滤函数
     function filterResources() {
-        // 获取所有种子行
-        const torrentRows = document.querySelectorAll('table.torrent-list tbody tr');
-        
-        torrentRows.forEach(row => {
-            // 查找Name和Size列
-            const nameCell = row.querySelector('td:nth-child(2)');
-            // 根据行中单元格的数量动态确定Size单元格的位置
-            const cells = row.querySelectorAll('td');
-            let sizeCell = null;
-            if (cells.length === 8) { // Name单元格有 colspan="2"
-                sizeCell = cells[3];
-            } else if (cells.length === 9) { // 存在单独的Comments单元格
-                sizeCell = cells[4];
-            } else {
-                // 对于未知结构的行，可以选择跳过
-                return;
+        try {
+            // 获取所有种子行
+            const torrentRows = document.querySelectorAll('table.torrent-list tbody tr');
+            
+            if (!torrentRows || torrentRows.length === 0) {
+                return; // 如果没有找到行，直接返回
             }
+            
+            torrentRows.forEach(row => {
+                try {
+                    // 查找Name和Size列
+                    const nameCell = row.querySelector('td:nth-child(2)');
+                    // 根据行中单元格的数量动态确定Size单元格的位置
+                    const cells = row.querySelectorAll('td');
+                    let sizeCell = null;
+                    if (cells.length === 8) { // Name单元格有 colspan="2"
+                        sizeCell = cells[3];
+                    } else if (cells.length === 9) { // 存在单独的Comments单元格
+                        sizeCell = cells[4];
+                    } else {
+                        // 对于未知结构的行，可以选择跳过
+                        return;
+                    }
 
-            // 从单元格中获取文本内容
-            const nameLink = nameCell ? nameCell.querySelector('a[href^="/view/"]') : null;
-            const nameText = nameLink ? nameLink.textContent.trim() : '';
-            
-            let shouldHide = false;
-            
-            // 检查大小过滤
-            if (sizeCell && sizeFilterActive) {
-                const sizeStr = sizeCell.textContent.trim();
-                const sizeInMB = convertSizeToMB(sizeStr);
-                
-                // 如果大小小于自定义最小大小，标记为隐藏
-                if (sizeInMB < minSizeMB) {
-                    shouldHide = true;
+                    // 从单元格中获取文本内容
+                    const nameLink = nameCell ? nameCell.querySelector('a[href^="/view/"]') : null;
+                    const nameText = nameLink ? nameLink.textContent.trim() : '';
+                    
+                    let shouldHide = false;
+                    
+                    // 检查大小过滤
+                    if (sizeCell && sizeFilterActive) {
+                        const sizeStr = sizeCell.textContent.trim();
+                        const sizeInMB = convertSizeToMB(sizeStr);
+                        
+                        // 如果大小小于自定义最小大小，标记为隐藏
+                        if (sizeInMB < minSizeMB) {
+                            shouldHide = true;
+                        }
+                    }
+                    
+                    // 检查中文字符过滤
+                    if (nameText && chineseFilterActive && !isPredominantlyChinese(nameText, chineseRatioThreshold)) {
+                        shouldHide = true;
+                    }
+                    
+                    // 根据过滤结果显示或隐藏行
+                    if (shouldHide) {
+                        row.style.display = 'none';
+                    } else {
+                        row.style.display = '';
+                    }
+                } catch (e) {
+                    console.warn('处理单个行时出错:', e);
+                    // 继续处理下一行
                 }
-            }
-            
-            // 检查中文字符过滤
-            if (nameText && chineseFilterActive && !isPredominantlyChinese(nameText, chineseRatioThreshold)) {
-                shouldHide = true;
-            }
-            
-            // 根据过滤结果显示或隐藏行
-            if (shouldHide) {
-                row.style.display = 'none';
-            } else {
-                row.style.display = '';
-            }
-        });
+            });
+        } catch (e) {
+            console.error('过滤资源时出错:', e);
+        }
     }
     
-    // 初始过滤
-    filterResources();
 
     // 更新过滤状态显示
     function updateFilterStatus() {
@@ -206,7 +241,10 @@
         } else {
             statusText += '无';
         }
-        filterStatus.textContent = statusText;
+        // 确保DOM元素存在后再更新文本
+        if (filterStatus) {
+            filterStatus.textContent = statusText;
+        }
     }
     
     // 创建一个控制面板
@@ -390,10 +428,6 @@
             row.style.display = '';
         });
         
-        // 临时保存当前过滤状态
-        const prevSizeFilter = sizeFilterActive;
-        const prevChineseFilter = chineseFilterActive;
-        
         // 关闭所有过滤
         sizeFilterActive = false;
         chineseFilterActive = false;
@@ -408,30 +442,53 @@
         showAllButton.style.display = 'none';
         applyAllButton.style.display = 'inline-block';
         
-        // 恢复过滤状态（但不应用）
-        sizeFilterActive = prevSizeFilter;
-        chineseFilterActive = prevChineseFilter;
+        // 保存设置到本地存储
+        saveSettings();
     });
     
     // 应用所有过滤
     applyAllButton.addEventListener('click', function() {
-        // 恢复过滤状态
-        sizeFilterActive = true;
-        chineseFilterActive = true;
+        // 从本地存储重新加载用户的过滤设置
+        const savedSettings = localStorage.getItem('sukebeiFilterSettings');
+        if (savedSettings) {
+            try {
+                const settings = JSON.parse(savedSettings);
+                sizeFilterActive = settings.sizeFilterActive !== undefined ? settings.sizeFilterActive : true;
+                chineseFilterActive = settings.chineseFilterActive !== undefined ? settings.chineseFilterActive : true;
+            } catch (e) {
+                // 如果解析失败，使用默认值
+                sizeFilterActive = true;
+                chineseFilterActive = true;
+            }
+        } else {
+            // 如果没有保存的设置，使用默认值
+            sizeFilterActive = true;
+            chineseFilterActive = true;
+        }
         
         // 更新按钮状态
-        sizeToggleButton.textContent = '关闭大小过滤';
-        sizeToggleButton.style.backgroundColor = '#4CAF50';
-        chineseToggleButton.textContent = '关闭中文过滤';
-        chineseToggleButton.style.backgroundColor = '#2196F3';
+        if (sizeFilterActive) {
+            sizeToggleButton.textContent = '关闭大小过滤';
+            sizeToggleButton.style.backgroundColor = '#4CAF50';
+        } else {
+            sizeToggleButton.textContent = '开启大小过滤';
+            sizeToggleButton.style.backgroundColor = '#9E9E9E';
+        }
+        
+        if (chineseFilterActive) {
+            chineseToggleButton.textContent = '关闭中文过滤';
+            chineseToggleButton.style.backgroundColor = '#2196F3';
+        } else {
+            chineseToggleButton.textContent = '开启中文过滤';
+            chineseToggleButton.style.backgroundColor = '#9E9E9E';
+        }
         
         // 应用过滤
         updateFilterStatus();
         filterResources();
         
         // 更新按钮可见性
-        showAllButton.style.display = 'inline-block';
-        applyAllButton.style.display = 'none';
+        updateButtonVisibility();
     });
     
     // 大小过滤应用按钮事件
@@ -486,8 +543,11 @@
     controlPanel.appendChild(applyAllButton);
     document.body.appendChild(controlPanel);
     
-    // 加载保存的设置
+    // 加载保存的设置（必须在所有DOM元素创建完成后调用）
     loadSettings();
+    
+    // 初始过滤（确保在设置加载完成后进行）
+    filterResources();
 
     // 定义面板切换函数
     function togglePanel() {
@@ -504,16 +564,51 @@
     // 注册菜单命令，用于切换面板显示/隐藏
     GM_registerMenuCommand('切换过滤面板显示状态', togglePanel);
 
+    // 防抖函数，避免频繁触发过滤
+    let filterTimeout = null;
+    function debounceFilter() {
+        if (filterTimeout) {
+            clearTimeout(filterTimeout);
+        }
+        filterTimeout = setTimeout(() => {
+            if (sizeFilterActive || chineseFilterActive) {
+                filterResources();
+            }
+        }, 100); // 100ms 防抖延迟
+    }
+
     // 监听页面变化，以便在动态加载内容时重新应用过滤
     const observer = new MutationObserver(function(mutations) {
-        if (sizeFilterActive || chineseFilterActive) {
-            filterResources();
+        // 检查是否有实际的内容变化
+        let hasContentChange = false;
+        for (let mutation of mutations) {
+            if (mutation.type === 'childList' && mutation.addedNodes.length > 0) {
+                // 检查是否添加了新的行元素
+                for (let node of mutation.addedNodes) {
+                    if (node.nodeType === Node.ELEMENT_NODE &&
+                        (node.tagName === 'TR' || node.querySelector('tr'))) {
+                        hasContentChange = true;
+                        break;
+                    }
+                }
+            }
+            if (hasContentChange) break;
+        }
+        
+        if (hasContentChange) {
+            debounceFilter();
         }
     });
 
     // 观察表格变化
     const torrentTable = document.querySelector('table.torrent-list');
     if (torrentTable) {
-        observer.observe(torrentTable, { childList: true, subtree: true });
+        observer.observe(torrentTable, {
+            childList: true,
+            subtree: true,
+            // 只观察子节点变化，不观察属性和文本变化
+            attributes: false,
+            characterData: false
+        });
     }
 })();
