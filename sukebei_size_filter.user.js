@@ -1,12 +1,16 @@
 // ==UserScript==
 // @name         Sukebei Size and Chinese Name Filter
 // @namespace    http://tampermonkey.net/
-// @version      4.0
-// @description  自定义过滤大小和中文字符占比的过滤器，支持面板显示/隐藏切换
+// @version      5.1
+// @description  自定义过滤大小和中文字符占比的过滤器，支持面板显示/隐藏切换，新增番号代码过滤功能
 // @author       qisexin
 // @license      MIT
 // @match        https://sukebei.nyaa.si/*
 // @grant        GM_registerMenuCommand
+// @updateURL    https://github.com/qisexin/sukebei_filter/raw/main/sukebei_size_filter.user.js
+// @downloadURL  https://github.com/qisexin/sukebei_filter/raw/main/sukebei_size_filter.user.js
+// @supportURL   https://github.com/qisexin/sukebei_filter/issues
+// @homepageURL  https://github.com/qisexin/sukebei_filter
 // ==/UserScript==
 
 (function() {
@@ -57,14 +61,14 @@
         if (threshold === undefined) {
             threshold = chineseRatioThreshold;
         }
-        
+
         // 中文字符范围：基本汉字、扩展A区汉字、兼容汉字
         const chineseRegex = /[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff]/;
-        
+
         if (!str || str.length === 0) return false;
-        
+
         let chineseCharCount = 0;
-        
+
         // 遍历字符串中的每个字符
         for (let i = 0; i < str.length; i++) {
             const char = str[i];
@@ -72,18 +76,37 @@
                 chineseCharCount++;
             }
         }
-        
+
         // 计算中文字符占比
         const chineseRatio = chineseCharCount / str.length;
-        
+
         // 如果中文字符占比超过指定阈值，返回true
         return chineseRatio >= threshold;
+    }
+
+    // 检测文件名是否包含番号代码格式
+    function containsCodePattern(str) {
+        if (!str || str.length === 0) return false;
+
+        // 匹配日本成人视频番号的主要模式：
+        // 2-6位英文字母 + 连字符 + 2-6位数字
+        // 例如：CMC-331, ppv-222, svni-333, CMAV-3335, CMCV-22, MXGS-123, IPTD-999
+        const mainPattern = /\b[A-Za-z]{2,6}-\d{2,6}\b/;
+
+        // 也匹配一些特殊格式，如连续多个番号
+        const extendedPattern = /[A-Za-z]{2,6}-\d{2,6}.*[A-Za-z]{2,6}-\d{2,6}/;
+
+        // 检查是否包含主要模式或多个番号
+        const containsPattern = mainPattern.test(str) || extendedPattern.test(str);
+
+        return containsPattern;
     }
 
     // 过滤状态
     let sizeFilterActive = true;
     let chineseFilterActive = true;
-    
+    let codePatternFilterActive = true; // 代码模式过滤状态
+
     // 自定义过滤参数
     let minSizeMB = 400; // 默认最小大小400MB
     let chineseRatioThreshold = 0.5; // 默认中文字符占比50%
@@ -98,6 +121,7 @@
             chineseRatioThreshold: chineseRatioThreshold,
             sizeFilterActive: sizeFilterActive,
             chineseFilterActive: chineseFilterActive,
+            codePatternFilterActive: codePatternFilterActive,
             panelVisible: panelVisible
         };
         localStorage.setItem('sukebeiFilterSettings', JSON.stringify(settings));
@@ -113,6 +137,7 @@
                 chineseRatioThreshold = settings.chineseRatioThreshold || 0.5;
                 sizeFilterActive = settings.sizeFilterActive !== undefined ? settings.sizeFilterActive : true;
                 chineseFilterActive = settings.chineseFilterActive !== undefined ? settings.chineseFilterActive : true;
+                codePatternFilterActive = settings.codePatternFilterActive !== undefined ? settings.codePatternFilterActive : true;
                 panelVisible = settings.panelVisible !== undefined ? settings.panelVisible : true;
                 
                 // 确保DOM元素存在后再更新它们的值
@@ -141,6 +166,17 @@
                     } else {
                         chineseToggleButton.textContent = '开启中文过滤';
                         chineseToggleButton.style.backgroundColor = '#9E9E9E';
+                    }
+                }
+
+                // 更新番号代码模式过滤按钮状态
+                if (codePatternToggleButton) {
+                    if (codePatternFilterActive) {
+                        codePatternToggleButton.textContent = '关闭番号代码过滤';
+                        codePatternToggleButton.style.backgroundColor = '#9C27B0';
+                    } else {
+                        codePatternToggleButton.textContent = '开启番号代码过滤';
+                        codePatternToggleButton.style.backgroundColor = '#9E9E9E';
                     }
                 }
                 
@@ -211,6 +247,11 @@
                     if (nameText && chineseFilterActive && !isPredominantlyChinese(nameText, chineseRatioThreshold)) {
                         shouldHide = true;
                     }
+
+                    // 检查番号代码模式过滤
+                    if (nameText && codePatternFilterActive && containsCodePattern(nameText)) {
+                        shouldHide = true;
+                    }
                     
                     // 根据过滤结果显示或隐藏行
                     if (shouldHide) {
@@ -232,15 +273,24 @@
     // 更新过滤状态显示
     function updateFilterStatus() {
         let statusText = '当前过滤: ';
-        if (sizeFilterActive && chineseFilterActive) {
-            statusText += `只显示 >${minSizeMB}MB 且中文字符>${Math.round(chineseRatioThreshold * 100)}%的资源`;
-        } else if (sizeFilterActive) {
-            statusText += `只显示 >${minSizeMB}MB 的资源`;
-        } else if (chineseFilterActive) {
-            statusText += `只显示中文字符>${Math.round(chineseRatioThreshold * 100)}%的资源`;
+        const activeFilters = [];
+
+        if (sizeFilterActive) {
+            activeFilters.push(`>${minSizeMB}MB`);
+        }
+        if (chineseFilterActive) {
+            activeFilters.push(`中文字符>${Math.round(chineseRatioThreshold * 100)}%`);
+        }
+        if (codePatternFilterActive) {
+            activeFilters.push('排除番号代码');
+        }
+
+        if (activeFilters.length > 0) {
+            statusText += activeFilters.join(' 且 ');
         } else {
             statusText += '无';
         }
+
         // 确保DOM元素存在后再更新文本
         if (filterStatus) {
             filterStatus.textContent = statusText;
@@ -345,6 +395,18 @@
     chineseToggleButton.style.borderRadius = '3px';
     chineseToggleButton.style.cursor = 'pointer';
     chineseToggleButton.style.marginBottom = '5px';
+
+    // 番号代码模式过滤切换按钮
+    const codePatternToggleButton = document.createElement('button');
+    codePatternToggleButton.textContent = '关闭番号代码过滤';
+    codePatternToggleButton.style.padding = '5px 10px';
+    codePatternToggleButton.style.backgroundColor = '#9C27B0';
+    codePatternToggleButton.style.color = 'white';
+    codePatternToggleButton.style.border = 'none';
+    codePatternToggleButton.style.borderRadius = '3px';
+    codePatternToggleButton.style.cursor = 'pointer';
+    codePatternToggleButton.style.marginRight = '5px';
+    codePatternToggleButton.style.marginBottom = '5px';
     
     // 显示所有资源按钮
     const showAllButton = document.createElement('button');
@@ -372,7 +434,7 @@
     
     // 更新按钮可见性
     function updateButtonVisibility() {
-        if (!sizeFilterActive || !chineseFilterActive) {
+        if (!sizeFilterActive || !chineseFilterActive || !codePatternFilterActive) {
             showAllButton.style.display = 'none';
             applyAllButton.style.display = 'inline-block';
         } else {
@@ -413,10 +475,30 @@
         }
         updateFilterStatus();
         filterResources();
-        
+
         // 保存设置到本地存储
         saveSettings();
-        
+
+        // 更新显示所有/应用所有按钮的可见性
+        updateButtonVisibility();
+    });
+
+    // 番号代码模式过滤切换
+    codePatternToggleButton.addEventListener('click', function() {
+        codePatternFilterActive = !codePatternFilterActive;
+        if (codePatternFilterActive) {
+            codePatternToggleButton.textContent = '关闭番号代码过滤';
+            codePatternToggleButton.style.backgroundColor = '#9C27B0';
+        } else {
+            codePatternToggleButton.textContent = '开启番号代码过滤';
+            codePatternToggleButton.style.backgroundColor = '#9E9E9E';
+        }
+        updateFilterStatus();
+        filterResources();
+
+        // 保存设置到本地存储
+        saveSettings();
+
         // 更新显示所有/应用所有按钮的可见性
         updateButtonVisibility();
     });
@@ -431,6 +513,7 @@
         // 关闭所有过滤
         sizeFilterActive = false;
         chineseFilterActive = false;
+        codePatternFilterActive = false;
         updateFilterStatus();
         
         // 更新按钮状态和可见性
@@ -438,6 +521,8 @@
         sizeToggleButton.style.backgroundColor = '#9E9E9E';
         chineseToggleButton.textContent = '开启中文过滤';
         chineseToggleButton.style.backgroundColor = '#9E9E9E';
+        codePatternToggleButton.textContent = '开启番号代码过滤';
+        codePatternToggleButton.style.backgroundColor = '#9E9E9E';
         
         showAllButton.style.display = 'none';
         applyAllButton.style.display = 'inline-block';
@@ -455,15 +540,18 @@
                 const settings = JSON.parse(savedSettings);
                 sizeFilterActive = settings.sizeFilterActive !== undefined ? settings.sizeFilterActive : true;
                 chineseFilterActive = settings.chineseFilterActive !== undefined ? settings.chineseFilterActive : true;
+                codePatternFilterActive = settings.codePatternFilterActive !== undefined ? settings.codePatternFilterActive : true;
             } catch (e) {
                 // 如果解析失败，使用默认值
                 sizeFilterActive = true;
                 chineseFilterActive = true;
+                codePatternFilterActive = true;
             }
         } else {
             // 如果没有保存的设置，使用默认值
             sizeFilterActive = true;
             chineseFilterActive = true;
+            codePatternFilterActive = true;
         }
         
         // 更新按钮状态
@@ -474,7 +562,7 @@
             sizeToggleButton.textContent = '开启大小过滤';
             sizeToggleButton.style.backgroundColor = '#9E9E9E';
         }
-        
+
         if (chineseFilterActive) {
             chineseToggleButton.textContent = '关闭中文过滤';
             chineseToggleButton.style.backgroundColor = '#2196F3';
@@ -482,7 +570,15 @@
             chineseToggleButton.textContent = '开启中文过滤';
             chineseToggleButton.style.backgroundColor = '#9E9E9E';
         }
-        
+
+        if (codePatternFilterActive) {
+            codePatternToggleButton.textContent = '关闭番号代码过滤';
+            codePatternToggleButton.style.backgroundColor = '#9C27B0';
+        } else {
+            codePatternToggleButton.textContent = '开启番号代码过滤';
+            codePatternToggleButton.style.backgroundColor = '#9E9E9E';
+        }
+
         // 应用过滤
         updateFilterStatus();
         filterResources();
@@ -538,6 +634,7 @@
     controlPanel.appendChild(document.createElement('br'));
     controlPanel.appendChild(sizeToggleButton);
     controlPanel.appendChild(chineseToggleButton);
+    controlPanel.appendChild(codePatternToggleButton);
     controlPanel.appendChild(document.createElement('br'));
     controlPanel.appendChild(showAllButton);
     controlPanel.appendChild(applyAllButton);
