@@ -1,12 +1,12 @@
 // ==UserScript==
 // @name         JavPost Visited Item Filter
 // @namespace    http://tampermonkey.net/
-// @version      1.3
+// @version      1.7
 // @description  Record visited JavPost detail pages and hide or show visited items on the new release list
 // @author       qisexin
 // @license      MIT
 // @match        https://www.javpost.net/*
-// @grant        GM_registerMenuCommand
+// @match        https://www.javmost.ws/*
 // @grant        GM_getValue
 // @grant        GM_setValue
 // @grant        GM_deleteValue
@@ -24,30 +24,35 @@
     const VISITED_MAX_AGE_DAYS = 180;
     const VISITED_MAX_COUNT = 10000;
     const RELEASE_NEW_PATH = '/release/new/';
+    const DETAIL_BADGE_ID = 'javpost-visited-filter-detail-badge';
+    const QUERY_RESULT_LIMIT = 20;
     const DISPLAY_MODES = {
         HIDE: 'hide',
         SHOW: 'show',
         MARK: 'mark'
     };
     const MODE_LABELS = {
-        [DISPLAY_MODES.HIDE]: '隐藏已访问',
-        [DISPLAY_MODES.SHOW]: '显示已访问',
-        [DISPLAY_MODES.MARK]: '标识已访问'
+        [DISPLAY_MODES.HIDE]: '隐藏',
+        [DISPLAY_MODES.SHOW]: '显示',
+        [DISPLAY_MODES.MARK]: '标识'
     };
     const MODE_COLORS = {
         [DISPLAY_MODES.HIDE]: '#FF9800',
-        [DISPLAY_MODES.SHOW]: '#9C27B0',
-        [DISPLAY_MODES.MARK]: '#FF9800'
+        [DISPLAY_MODES.SHOW]: '#607D8B',
+        [DISPLAY_MODES.MARK]: '#9C27B0'
     };
     const DEFAULT_SETTINGS = {
         displayMode: DISPLAY_MODES.HIDE,
-        panelVisible: true
+        panelVisible: false
     };
 
     let settings = loadSettings();
     let panel;
+    let triggerButton;
     let statusText;
-    let toggleButton;
+    let modeButton;
+    let queryInput;
+    let lastStats = null;
 
     function getStoredValue(key, defaultValue) {
         if (typeof GM_getValue === 'function') {
@@ -138,8 +143,23 @@
     }
 
     function isSkippableSlug(slug) {
-        const skippable = new Set(['', 'RELEASE', 'PAGE', 'SEARCH', 'GENRE', 'STAR', 'MAKER', 'LABEL']);
+        const skippable = new Set([
+            '', 'HOME', 'RELEASE', 'PAGE', 'SEARCH', 'ADVANCE',
+            'CATEGORY', 'CENSOR', 'UNCENSOR', 'ALLCATEGORY',
+            'GENRE', 'STAR', 'MAKER', 'LABEL', 'DIRECTOR',
+            'TOPVIEW', 'TOPDAILY', 'TOPWEEK', 'TOPMONTH',
+            'ALLCODE', 'RATING', 'ALLDIRECTOR', 'ALLMAKER'
+        ]);
         return skippable.has(slug);
+    }
+
+    function isDetailPage() {
+        const slug = getPathSlug(location.pathname);
+        return Boolean(slug && !isSkippableSlug(slug));
+    }
+
+    function isListPage() {
+        return !isDetailPage();
     }
 
     function markVisited(id) {
@@ -178,10 +198,91 @@
 自动清理：超过 ${VISITED_MAX_AGE_DAYS} 天`);
     }
 
+    function getItemIdFromQuery(value) {
+        const text = String(value || '').trim();
+        if (!text) return '';
+
+        try {
+            const url = new URL(text, location.origin);
+            if (url.origin === location.origin) return getPathSlug(url.pathname);
+        } catch (error) {
+            return normalizeItemId(text);
+        }
+
+        return normalizeItemId(text);
+    }
+
+    function findVisitedMatches(query, visitedMap) {
+        return Object.keys(visitedMap)
+            .filter(id => id.includes(query))
+            .sort((a, b) => (Number(b === query) - Number(a === query)) || visitedMap[b] - visitedMap[a]);
+    }
+
+    function formatVisitedMatches(matches, visitedMap) {
+        const lines = matches.slice(0, QUERY_RESULT_LIMIT).map(id => (
+            `${id}：${new Date(visitedMap[id]).toLocaleString()}`
+        ));
+        const moreCount = matches.length - lines.length;
+        if (moreCount > 0) lines.push(`另有 ${moreCount} 条未显示`);
+        return lines.join('\n');
+    }
+
+    function queryVisitedRecord() {
+        const query = getItemIdFromQuery(queryInput && queryInput.value);
+        if (!query || isSkippableSlug(query)) {
+            alert('请输入有效的 JavPost 番号或详情页链接');
+            return;
+        }
+
+        const visitedMap = loadVisitedMap();
+        const matches = findVisitedMatches(query, visitedMap);
+        if (!matches.length) {
+            alert(`${query} 未匹配到已访问记录`);
+            return;
+        }
+
+        alert([
+            `${query} 匹配到 ${matches.length} 条已访问记录`,
+            formatVisitedMatches(matches, visitedMap)
+        ].join('\n'));
+    }
+
     function recordDetailPage() {
-        if (isReleaseNewPage()) return;
+        if (!isDetailPage()) return;
+        markVisited(getPathSlug(location.pathname));
+    }
+
+    function showDetailVisitedMark() {
+        const existingBadge = document.getElementById(DETAIL_BADGE_ID);
+        if (!isDetailPage() || settings.displayMode !== DISPLAY_MODES.MARK || !document.body) {
+            if (existingBadge) existingBadge.remove();
+            return;
+        }
+
         const id = getPathSlug(location.pathname);
-        markVisited(id);
+        if (!isVisited(id, loadVisitedMap())) {
+            if (existingBadge) existingBadge.remove();
+            return;
+        }
+        if (existingBadge) {
+            existingBadge.textContent = `已访问：${id}`;
+            return;
+        }
+
+        const badge = document.createElement('div');
+        badge.id = DETAIL_BADGE_ID;
+        badge.textContent = `已访问：${id}`;
+        badge.style.position = 'fixed';
+        badge.style.top = '10px';
+        badge.style.right = '10px';
+        badge.style.zIndex = '10000';
+        badge.style.padding = '8px 12px';
+        badge.style.backgroundColor = MODE_COLORS[DISPLAY_MODES.MARK];
+        badge.style.color = 'white';
+        badge.style.borderRadius = '4px';
+        badge.style.boxShadow = '0 2px 8px rgba(0, 0, 0, 0.25)';
+        badge.style.fontWeight = 'bold';
+        document.body.appendChild(badge);
     }
 
     function findItemContainer(link) {
@@ -233,7 +334,7 @@
     }
 
     function filterItems() {
-        if (!isReleaseNewPage()) return;
+        if (!isListPage()) return;
 
         let totalCount = 0;
         let visitedCount = 0;
@@ -255,14 +356,51 @@
     }
 
     function updateStatus(totalCount, visitedCount, hiddenCount) {
-        if (!statusText) return;
-        statusText.textContent = `${MODE_LABELS[settings.displayMode]} | 本页 ${totalCount} 项，已访问 ${visitedCount} 项，隐藏 ${hiddenCount} 项`;
+        lastStats = { totalCount, visitedCount, hiddenCount };
+        if (statusText) {
+            statusText.textContent = [
+                `已访问：${MODE_LABELS[settings.displayMode]}（${visitedCount}）`,
+                `本页 ${totalCount} 项，隐藏 ${hiddenCount} 项`
+            ].join('\n');
+        }
+        updateTriggerButton();
     }
 
-    function updateToggleButton() {
-        if (!toggleButton) return;
-        toggleButton.textContent = `模式：${MODE_LABELS[settings.displayMode]}`;
-        toggleButton.style.backgroundColor = MODE_COLORS[settings.displayMode];
+    function getTriggerColor() {
+        return MODE_COLORS[settings.displayMode] || '#607D8B';
+    }
+
+    function updateTriggerButton(stats = lastStats) {
+        if (!triggerButton) return;
+
+        const countText = stats ? ` ${stats.totalCount - stats.hiddenCount}/${stats.totalCount}` : '';
+        triggerButton.textContent = `筛选${countText}`;
+        triggerButton.style.backgroundColor = getTriggerColor();
+        triggerButton.style.boxShadow = settings.panelVisible
+            ? '0 0 0 2px rgba(255, 255, 255, 0.85), 0 2px 8px rgba(0, 0, 0, 0.25)'
+            : '0 2px 8px rgba(0, 0, 0, 0.25)';
+    }
+
+    function createTriggerButton() {
+        if (!isListPage() || !document.body) return;
+
+        triggerButton = createButton('筛选', getTriggerColor());
+        triggerButton.style.position = 'fixed';
+        triggerButton.style.top = '10px';
+        triggerButton.style.right = '10px';
+        triggerButton.style.zIndex = '10000';
+        triggerButton.style.fontWeight = 'bold';
+        triggerButton.title = '点击展开/收起面板，Alt+F 面板，Alt+V 已访问模式';
+        triggerButton.addEventListener('click', togglePanel);
+        document.body.appendChild(triggerButton);
+        updateTriggerButton();
+    }
+
+    function updateModeButton() {
+        if (!modeButton) return;
+        modeButton.textContent = `已访问：${MODE_LABELS[settings.displayMode]}`;
+        modeButton.style.backgroundColor = MODE_COLORS[settings.displayMode];
+        modeButton.title = 'Alt+V 切换：隐藏 / 显示 / 标识已访问';
     }
 
     function cycleDisplayMode() {
@@ -270,8 +408,39 @@
         const currentIndex = modes.indexOf(settings.displayMode);
         settings.displayMode = modes[(currentIndex + 1) % modes.length];
         saveSettings();
-        updateToggleButton();
+        updateModeButton();
         filterItems();
+        showDetailVisitedMark();
+    }
+
+    function closePanel() {
+        if (!settings.panelVisible || !panel) return;
+
+        settings.panelVisible = false;
+        panel.style.display = 'none';
+        saveSettings();
+        updateTriggerButton();
+    }
+
+    function handleKeyboardShortcuts(event) {
+        if (event.isComposing) return;
+
+        const key = String(event.key || '').toLowerCase();
+        const onlyAlt = event.altKey && !event.ctrlKey && !event.shiftKey && !event.metaKey;
+
+        if (onlyAlt && key === 'f') {
+            event.preventDefault();
+            togglePanel();
+            return;
+        }
+
+        if (onlyAlt && key === 'v') {
+            event.preventDefault();
+            cycleDisplayMode();
+            return;
+        }
+
+        if (event.key === 'Escape') closePanel();
     }
 
     function togglePanel() {
@@ -279,6 +448,7 @@
         settings.panelVisible = !settings.panelVisible;
         panel.style.display = settings.panelVisible ? 'block' : 'none';
         saveSettings();
+        updateTriggerButton();
     }
 
     function clearAllVisitedRecords() {
@@ -300,12 +470,22 @@
         return button;
     }
 
+    function createQueryInput(placeholder) {
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.placeholder = placeholder;
+        input.style.width = '170px';
+        input.style.color = 'black';
+        input.style.marginRight = '5px';
+        return input;
+    }
+
     function createPanel() {
-        if (!isReleaseNewPage() || !document.body) return;
+        if (!isListPage() || !document.body) return;
 
         panel = document.createElement('div');
         panel.style.position = 'fixed';
-        panel.style.top = '10px';
+        panel.style.top = '48px';
         panel.style.right = '10px';
         panel.style.zIndex = '9999';
         panel.style.backgroundColor = 'rgba(0, 0, 0, 0.82)';
@@ -313,28 +493,48 @@
         panel.style.padding = '10px';
         panel.style.borderRadius = '5px';
         panel.style.fontSize = '14px';
+        panel.style.minWidth = '260px';
         panel.style.display = settings.panelVisible ? 'block' : 'none';
 
         statusText = document.createElement('div');
         statusText.style.marginBottom = '10px';
+        statusText.style.whiteSpace = 'pre-line';
 
-        toggleButton = createButton('', '#9C27B0');
+        modeButton = createButton('', '#FF9800');
+        queryInput = createQueryInput('番号或详情页链接');
+        const queryButton = createButton('查询', '#2196F3');
+        const statsButton = createButton('查看统计', '#2196F3');
         const clearButton = createButton('清空记录', '#607D8B');
+        clearButton.title = '危险操作：清空全部已访问记录';
+        clearButton.style.fontSize = '12px';
+        clearButton.style.opacity = '0.8';
 
-        toggleButton.addEventListener('click', cycleDisplayMode);
+        modeButton.addEventListener('click', cycleDisplayMode);
+        queryButton.addEventListener('click', queryVisitedRecord);
+        queryInput.addEventListener('keydown', event => {
+            if (event.key === 'Enter') queryVisitedRecord();
+        });
+        statsButton.addEventListener('click', showVisitedStats);
         clearButton.addEventListener('click', clearAllVisitedRecords);
 
         panel.appendChild(statusText);
-        panel.appendChild(toggleButton);
+        panel.appendChild(modeButton);
+        panel.appendChild(statsButton);
+        panel.appendChild(document.createElement('br'));
+        panel.appendChild(document.createElement('br'));
+        panel.appendChild(queryInput);
+        panel.appendChild(queryButton);
+        panel.appendChild(document.createElement('br'));
+        panel.appendChild(document.createElement('br'));
         panel.appendChild(clearButton);
         document.body.appendChild(panel);
 
         ensureMarkStyle();
-        updateToggleButton();
+        updateModeButton();
     }
 
     function watchListChanges() {
-        if (!isReleaseNewPage() || !document.body) return;
+        if (!isListPage() || !document.body) return;
 
         let filterTimer = null;
         const observer = new MutationObserver(() => {
@@ -351,14 +551,12 @@
     function init() {
         cleanupVisitedRecords();
         recordDetailPage();
+        showDetailVisitedMark();
+        createTriggerButton();
         createPanel();
         filterItems();
         watchListChanges();
-
-        GM_registerMenuCommand('切换 JavPost 已访问过滤面板', togglePanel);
-        GM_registerMenuCommand('切换 JavPost 显示模式', cycleDisplayMode);
-        GM_registerMenuCommand('查看 JavPost 已访问统计', showVisitedStats);
-        GM_registerMenuCommand('清空 JavPost 已访问记录', clearAllVisitedRecords);
+        document.addEventListener('keydown', handleKeyboardShortcuts);
     }
 
     init();

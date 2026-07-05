@@ -1,7 +1,7 @@
 ﻿// ==UserScript==
 // @name         Sukebei Chinese Title Size Filter
 // @namespace    http://tampermonkey.net/
-// @version      7.4
+// @version      7.6
 // @description  保留中文标题和大小过滤，并支持隐藏、显示或标识已访问项
 // @author       qisexin
 // @license      MIT
@@ -22,6 +22,8 @@
     const VISITED_MAX_AGE_DAYS = 180;
     const VISITED_MAX_COUNT = 10000;
     const MARK_CLASS = 'sukebei-visited-filter-marked';
+    const DETAIL_BADGE_ID = 'sukebei-visited-filter-detail-badge';
+    const QUERY_RESULT_LIMIT = 20;
     const DISPLAY_MODES = {
         HIDE: 'hide',
         SHOW: 'show',
@@ -50,6 +52,7 @@
     let minSizeInput;
     let showAllButton;
     let modeButton;
+    let queryInput;
     let clearVisitedButton;
     let lastStats = null;
 
@@ -109,6 +112,14 @@
         return match ? match[1] : '';
     }
 
+    function isDetailPage() {
+        return Boolean(getTorrentIdFromPath(location.pathname));
+    }
+
+    function isListPage() {
+        return !isDetailPage();
+    }
+
     function getTorrentIdFromLink(link) {
         try {
             const url = new URL(link.getAttribute('href'), location.origin);
@@ -131,8 +142,91 @@
         saveVisitedMap(visitedMap);
     }
 
+    function showDetailVisitedMark() {
+        const existingBadge = document.getElementById(DETAIL_BADGE_ID);
+        if (!isDetailPage() || settings.displayMode !== DISPLAY_MODES.MARK || !document.body) {
+            if (existingBadge) existingBadge.remove();
+            return;
+        }
+
+        const id = getTorrentIdFromPath(location.pathname);
+        if (!isVisited(id, loadVisitedMap())) {
+            if (existingBadge) existingBadge.remove();
+            return;
+        }
+        if (existingBadge) {
+            existingBadge.textContent = `已访问：${id}`;
+            return;
+        }
+
+        const badge = document.createElement('div');
+        badge.id = DETAIL_BADGE_ID;
+        badge.textContent = `已访问：${id}`;
+        badge.style.position = 'fixed';
+        badge.style.top = '10px';
+        badge.style.right = '10px';
+        badge.style.zIndex = '10000';
+        badge.style.padding = '8px 12px';
+        badge.style.backgroundColor = MODE_COLORS[DISPLAY_MODES.MARK];
+        badge.style.color = 'white';
+        badge.style.borderRadius = '4px';
+        badge.style.boxShadow = '0 2px 8px rgba(0, 0, 0, 0.25)';
+        badge.style.fontWeight = 'bold';
+        document.body.appendChild(badge);
+    }
+
     function clearVisitedRecords() {
         localStorage.removeItem(STORAGE_KEYS.VISITED);
+    }
+
+    function getTorrentIdFromQuery(value) {
+        const text = String(value || '').trim();
+        if (/^\d+$/.test(text)) return text;
+
+        const pathMatch = text.match(/(?:^|\/)view\/(\d+)/);
+        if (pathMatch) return pathMatch[1];
+
+        try {
+            const url = new URL(text, location.origin);
+            return url.origin === location.origin ? getTorrentIdFromPath(url.pathname) : '';
+        } catch (error) {
+            return '';
+        }
+    }
+
+    function findVisitedMatches(query, visitedMap) {
+        return Object.keys(visitedMap)
+            .filter(id => id.includes(query))
+            .sort((a, b) => (Number(b === query) - Number(a === query)) || visitedMap[b] - visitedMap[a]);
+    }
+
+    function formatVisitedMatches(matches, visitedMap) {
+        const lines = matches.slice(0, QUERY_RESULT_LIMIT).map(id => (
+            `${id}：${new Date(visitedMap[id]).toLocaleString()}`
+        ));
+        const moreCount = matches.length - lines.length;
+        if (moreCount > 0) lines.push(`另有 ${moreCount} 条未显示`);
+        return lines.join('\n');
+    }
+
+    function queryVisitedRecord() {
+        const query = getTorrentIdFromQuery(queryInput && queryInput.value);
+        if (!query) {
+            alert('请输入有效的 Sukebei ID 或详情页链接');
+            return;
+        }
+
+        const visitedMap = loadVisitedMap();
+        const matches = findVisitedMatches(query, visitedMap);
+        if (!matches.length) {
+            alert(`${query} 未匹配到已访问记录`);
+            return;
+        }
+
+        alert([
+            `${query} 匹配到 ${matches.length} 条已访问记录`,
+            formatVisitedMatches(matches, visitedMap)
+        ].join('\n'));
     }
 
     function convertSizeToMB(sizeText) {
@@ -193,6 +287,8 @@
     }
 
     function filterRows() {
+        if (!isListPage()) return;
+
         const rows = Array.from(document.querySelectorAll('table.torrent-list tbody tr'));
         const visitedMap = loadVisitedMap();
         const stats = {
@@ -285,6 +381,8 @@
     }
 
     function createTriggerButton() {
+        if (!isListPage() || !document.body) return;
+
         triggerButton = createButton('筛选', getTriggerColor());
         triggerButton.style.position = 'fixed';
         triggerButton.style.top = '10px';
@@ -298,7 +396,7 @@
     }
 
     function closePanel() {
-        if (!settings.panelVisible) return;
+        if (!settings.panelVisible || !panel) return;
 
         settings.panelVisible = false;
         panel.style.display = 'none';
@@ -348,6 +446,7 @@
     }
 
     function togglePanel() {
+        if (!panel) return;
         settings.panelVisible = !settings.panelVisible;
         panel.style.display = settings.panelVisible ? 'block' : 'none';
         saveSettings();
@@ -381,6 +480,7 @@
         saveSettings();
         updateModeButton();
         filterRows();
+        showDetailVisitedMark();
     }
 
     function clearAllVisitedRecords() {
@@ -419,7 +519,19 @@
         return button;
     }
 
+    function createQueryInput(placeholder) {
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.placeholder = placeholder;
+        input.style.width = '170px';
+        input.style.color = 'black';
+        input.style.marginRight = '5px';
+        return input;
+    }
+
     function createPanel() {
+        if (!isListPage() || !document.body) return;
+
         panel = document.createElement('div');
         panel.style.position = 'fixed';
         panel.style.top = '48px';
@@ -454,6 +566,8 @@
         const applyButton = createButton('应用', '#2196F3');
         showAllButton = createButton('', '#f44336');
         modeButton = createButton('', '#FF9800');
+        queryInput = createQueryInput('ID 或详情页链接');
+        const queryButton = createButton('查询', '#2196F3');
         clearVisitedButton = createButton('清空记录', '#607D8B');
         applyButton.title = '应用最小大小，输入框内可按 Enter';
         clearVisitedButton.title = '危险操作：清空全部已访问记录';
@@ -466,6 +580,10 @@
         });
         showAllButton.addEventListener('click', toggleShowAll);
         modeButton.addEventListener('click', cycleDisplayMode);
+        queryButton.addEventListener('click', queryVisitedRecord);
+        queryInput.addEventListener('keydown', event => {
+            if (event.key === 'Enter') queryVisitedRecord();
+        });
         clearVisitedButton.addEventListener('click', clearAllVisitedRecords);
 
         panel.appendChild(statusText);
@@ -478,6 +596,10 @@
         panel.appendChild(modeButton);
         panel.appendChild(document.createElement('br'));
         panel.appendChild(document.createElement('br'));
+        panel.appendChild(queryInput);
+        panel.appendChild(queryButton);
+        panel.appendChild(document.createElement('br'));
+        panel.appendChild(document.createElement('br'));
         panel.appendChild(clearVisitedButton);
 
         document.body.appendChild(panel);
@@ -487,6 +609,8 @@
     }
 
     function watchTableChanges() {
+        if (!isListPage() || !document.body) return;
+
         const torrentTable = document.querySelector('table.torrent-list');
         if (!torrentTable) return;
 
@@ -514,6 +638,7 @@
 
     cleanupVisitedRecords();
     recordDetailPage();
+    showDetailVisitedMark();
     createTriggerButton();
     createPanel();
     filterRows();
