@@ -1,12 +1,11 @@
 ﻿// ==UserScript==
 // @name         Sukebei Chinese Title Size Filter
 // @namespace    http://tampermonkey.net/
-// @version      7.3
+// @version      7.4
 // @description  保留中文标题和大小过滤，并支持隐藏、显示或标识已访问项
 // @author       qisexin
 // @license      MIT
 // @match        https://sukebei.nyaa.si/*
-// @grant        GM_registerMenuCommand
 // @updateURL    https://github.com/qisexin/sukebei_filter/raw/main/sukebei_size_filter.user.js
 // @downloadURL  https://github.com/qisexin/sukebei_filter/raw/main/sukebei_size_filter.user.js
 // @supportURL   https://github.com/qisexin/sukebei_filter/issues
@@ -16,8 +15,10 @@
 (function() {
     'use strict';
 
-    const STORAGE_KEY = 'sukebeiChineseTitleFilterSettings';
-    const VISITED_KEY = 'sukebeiVisitedItems';
+    const STORAGE_KEYS = {
+        SETTINGS: 'sukebeiSizeFilter.settings.v1',
+        VISITED: 'sukebeiSizeFilter.visited.v1'
+    };
     const VISITED_MAX_AGE_DAYS = 180;
     const VISITED_MAX_COUNT = 10000;
     const MARK_CLASS = 'sukebei-visited-filter-marked';
@@ -27,14 +28,14 @@
         MARK: 'mark'
     };
     const MODE_LABELS = {
-        [DISPLAY_MODES.HIDE]: '隐藏已访问',
-        [DISPLAY_MODES.SHOW]: '显示已访问',
-        [DISPLAY_MODES.MARK]: '标识已访问'
+        [DISPLAY_MODES.HIDE]: '隐藏',
+        [DISPLAY_MODES.SHOW]: '显示',
+        [DISPLAY_MODES.MARK]: '标识'
     };
     const MODE_COLORS = {
         [DISPLAY_MODES.HIDE]: '#FF9800',
-        [DISPLAY_MODES.SHOW]: '#9C27B0',
-        [DISPLAY_MODES.MARK]: '#FF9800'
+        [DISPLAY_MODES.SHOW]: '#607D8B',
+        [DISPLAY_MODES.MARK]: '#9C27B0'
     };
     const DEFAULT_SETTINGS = {
         minSizeMB: 400,
@@ -44,15 +45,17 @@
     };
     let settings = loadSettings();
     let panel;
+    let triggerButton;
     let statusText;
     let minSizeInput;
     let showAllButton;
     let modeButton;
     let clearVisitedButton;
+    let lastStats = null;
 
     function loadSettings() {
         try {
-            const savedSettings = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
+            const savedSettings = JSON.parse(localStorage.getItem(STORAGE_KEYS.SETTINGS) || '{}');
             return normalizeSettings({ ...DEFAULT_SETTINGS, ...savedSettings });
         } catch (error) {
             console.warn('Failed to load filter settings:', error);
@@ -69,12 +72,12 @@
 
     function saveSettings() {
         const { temporarilyShowAll, ...savedSettings } = settings;
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(savedSettings));
+        localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(savedSettings));
     }
 
     function loadVisitedMap() {
         try {
-            return JSON.parse(localStorage.getItem(VISITED_KEY) || '{}');
+            return JSON.parse(localStorage.getItem(STORAGE_KEYS.VISITED) || '{}');
         } catch (error) {
             console.warn('Failed to load visited items:', error);
             return {};
@@ -94,7 +97,7 @@
         ids.forEach(id => {
             trimmed[id] = visitedMap[id];
         });
-        localStorage.setItem(VISITED_KEY, JSON.stringify(trimmed));
+        localStorage.setItem(STORAGE_KEYS.VISITED, JSON.stringify(trimmed));
     }
 
     function cleanupVisitedRecords() {
@@ -129,7 +132,7 @@
     }
 
     function clearVisitedRecords() {
-        localStorage.removeItem(VISITED_KEY);
+        localStorage.removeItem(STORAGE_KEYS.VISITED);
     }
 
     function convertSizeToMB(sizeText) {
@@ -244,24 +247,90 @@
     }
 
     function updateStatus(stats) {
-        if (!statusText) return;
+        lastStats = stats;
+        if (!statusText) {
+            updateTriggerButton(stats);
+            return;
+        }
 
         if (settings.temporarilyShowAll) {
-            statusText.textContent = `已临时显示全部：共 ${stats.total} 条`;
+            statusText.textContent = `已显示全部：共 ${stats.total} 条`;
+            updateTriggerButton(stats);
             return;
         }
 
         statusText.textContent = [
-            `已访问模式：${MODE_LABELS[settings.displayMode]}`,
-            `显示 ${stats.visible}/${stats.total}`,
-            `隐藏 ${stats.hidden}`,
-            `已访问 ${stats.visited}`,
-            `已访问隐藏 ${stats.visitedHidden}`,
-            `日文 ${stats.japaneseTitle}`,
-            `非中文 ${stats.noChineseTitle}`,
-            `番号 ${stats.codeTitle}`,
-            `过小 ${stats.tooSmall}`
-        ].join(' | ');
+            `显示 ${stats.visible}/${stats.total}，隐藏 ${stats.hidden}`,
+            `已访问：${MODE_LABELS[settings.displayMode]}（${stats.visited}）`,
+            `日文 ${stats.japaneseTitle} · 非中文 ${stats.noChineseTitle} · 番号 ${stats.codeTitle} · 过小 ${stats.tooSmall}`
+        ].join('\n');
+        updateTriggerButton(stats);
+    }
+
+    function getTriggerColor() {
+        if (settings.temporarilyShowAll) return '#4CAF50';
+        return MODE_COLORS[settings.displayMode] || '#607D8B';
+    }
+
+    function updateTriggerButton(stats = lastStats) {
+        if (!triggerButton) return;
+
+        const label = settings.temporarilyShowAll ? '全部' : '筛选';
+        const countText = stats ? ` ${stats.visible}/${stats.total}` : '';
+        triggerButton.textContent = `${label}${countText}`;
+        triggerButton.style.backgroundColor = getTriggerColor();
+        triggerButton.style.boxShadow = settings.panelVisible
+            ? '0 0 0 2px rgba(255, 255, 255, 0.85), 0 2px 8px rgba(0, 0, 0, 0.25)'
+            : '0 2px 8px rgba(0, 0, 0, 0.25)';
+    }
+
+    function createTriggerButton() {
+        triggerButton = createButton('筛选', getTriggerColor());
+        triggerButton.style.position = 'fixed';
+        triggerButton.style.top = '10px';
+        triggerButton.style.right = '10px';
+        triggerButton.style.zIndex = '10000';
+        triggerButton.style.fontWeight = 'bold';
+        triggerButton.title = '点击展开/收起面板，Alt+F 面板，Alt+A 显示全部，Alt+V 已访问模式';
+        triggerButton.addEventListener('click', togglePanel);
+        document.body.appendChild(triggerButton);
+        updateTriggerButton();
+    }
+
+    function closePanel() {
+        if (!settings.panelVisible) return;
+
+        settings.panelVisible = false;
+        panel.style.display = 'none';
+        saveSettings();
+        updateTriggerButton();
+    }
+
+    function handleKeyboardShortcuts(event) {
+        if (event.isComposing) return;
+
+        const key = String(event.key || '').toLowerCase();
+        const onlyAlt = event.altKey && !event.ctrlKey && !event.shiftKey && !event.metaKey;
+
+        if (onlyAlt && key === 'f') {
+            event.preventDefault();
+            togglePanel();
+            return;
+        }
+
+        if (onlyAlt && key === 'a') {
+            event.preventDefault();
+            toggleShowAll();
+            return;
+        }
+
+        if (onlyAlt && key === 'v') {
+            event.preventDefault();
+            cycleDisplayMode();
+            return;
+        }
+
+        if (event.key === 'Escape') closePanel();
     }
 
     function applyMinSize() {
@@ -282,6 +351,7 @@
         settings.panelVisible = !settings.panelVisible;
         panel.style.display = settings.panelVisible ? 'block' : 'none';
         saveSettings();
+        updateTriggerButton();
     }
 
     function toggleShowAll() {
@@ -292,14 +362,16 @@
 
     function updateShowAllButton() {
         if (!showAllButton) return;
-        showAllButton.textContent = settings.temporarilyShowAll ? '恢复过滤' : '临时显示全部';
+        showAllButton.textContent = settings.temporarilyShowAll ? '恢复过滤' : '显示全部';
         showAllButton.style.backgroundColor = settings.temporarilyShowAll ? '#4CAF50' : '#f44336';
+        showAllButton.title = 'Alt+A 临时显示全部 / 恢复过滤';
     }
 
     function updateModeButton() {
         if (!modeButton) return;
         modeButton.textContent = `已访问：${MODE_LABELS[settings.displayMode]}`;
         modeButton.style.backgroundColor = MODE_COLORS[settings.displayMode];
+        modeButton.title = 'Alt+V 切换：隐藏 / 显示 / 标识已访问';
     }
 
     function cycleDisplayMode() {
@@ -350,7 +422,7 @@
     function createPanel() {
         panel = document.createElement('div');
         panel.style.position = 'fixed';
-        panel.style.top = '10px';
+        panel.style.top = '48px';
         panel.style.right = '10px';
         panel.style.zIndex = '9999';
         panel.style.backgroundColor = 'rgba(0, 0, 0, 0.82)';
@@ -358,10 +430,12 @@
         panel.style.padding = '10px';
         panel.style.borderRadius = '5px';
         panel.style.fontSize = '14px';
+        panel.style.minWidth = '320px';
         panel.style.display = settings.panelVisible ? 'block' : 'none';
 
         statusText = document.createElement('div');
         statusText.style.marginBottom = '10px';
+        statusText.style.whiteSpace = 'pre-line';
 
         const sizeLabel = document.createElement('label');
         sizeLabel.textContent = '最小大小 (MB): ';
@@ -375,11 +449,16 @@
         minSizeInput.style.width = '80px';
         minSizeInput.style.color = 'black';
         minSizeInput.style.marginRight = '5px';
+        minSizeInput.title = '输入后按 Enter 或点击应用';
 
         const applyButton = createButton('应用', '#2196F3');
         showAllButton = createButton('', '#f44336');
         modeButton = createButton('', '#FF9800');
-        clearVisitedButton = createButton('清空已访问', '#607D8B');
+        clearVisitedButton = createButton('清空记录', '#607D8B');
+        applyButton.title = '应用最小大小，输入框内可按 Enter';
+        clearVisitedButton.title = '危险操作：清空全部已访问记录';
+        clearVisitedButton.style.fontSize = '12px';
+        clearVisitedButton.style.opacity = '0.8';
 
         applyButton.addEventListener('click', applyMinSize);
         minSizeInput.addEventListener('keydown', event => {
@@ -397,6 +476,8 @@
         panel.appendChild(document.createElement('br'));
         panel.appendChild(showAllButton);
         panel.appendChild(modeButton);
+        panel.appendChild(document.createElement('br'));
+        panel.appendChild(document.createElement('br'));
         panel.appendChild(clearVisitedButton);
 
         document.body.appendChild(panel);
@@ -433,11 +514,9 @@
 
     cleanupVisitedRecords();
     recordDetailPage();
+    createTriggerButton();
     createPanel();
     filterRows();
     watchTableChanges();
-
-    GM_registerMenuCommand('切换中文标题过滤面板', togglePanel);
-    GM_registerMenuCommand('切换 Sukebei 已访问显示模式', cycleDisplayMode);
-    GM_registerMenuCommand('清空 Sukebei 已访问记录', clearAllVisitedRecords);
+    document.addEventListener('keydown', handleKeyboardShortcuts);
 })();
