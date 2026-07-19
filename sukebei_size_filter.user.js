@@ -1,7 +1,7 @@
 ﻿// ==UserScript==
 // @name         Sukebei Chinese Title Size Filter
 // @namespace    http://tampermonkey.net/
-// @version      7.6
+// @version      7.7
 // @description  保留中文标题和大小过滤，并支持隐藏、显示或标识已访问项
 // @author       qisexin
 // @license      MIT
@@ -55,6 +55,7 @@
     let queryInput;
     let clearVisitedButton;
     let lastStats = null;
+    let detailPreviousVisitTime = 0;
 
     function loadSettings() {
         try {
@@ -138,30 +139,33 @@
         if (!id) return;
 
         const visitedMap = loadVisitedMap();
+        detailPreviousVisitTime = Number(visitedMap[id]) || 0;
         visitedMap[id] = Date.now();
         saveVisitedMap(visitedMap);
     }
 
     function showDetailVisitedMark() {
         const existingBadge = document.getElementById(DETAIL_BADGE_ID);
-        if (!isDetailPage() || settings.displayMode !== DISPLAY_MODES.MARK || !document.body) {
+        if (!isDetailPage() || !document.body) {
             if (existingBadge) existingBadge.remove();
             return;
         }
 
         const id = getTorrentIdFromPath(location.pathname);
-        if (!isVisited(id, loadVisitedMap())) {
+        if (!detailPreviousVisitTime) {
             if (existingBadge) existingBadge.remove();
             return;
         }
+
+        const badgeText = `已访问：${id}\n访问时间：${new Date(detailPreviousVisitTime).toLocaleString()}`;
         if (existingBadge) {
-            existingBadge.textContent = `已访问：${id}`;
+            existingBadge.textContent = badgeText;
             return;
         }
 
         const badge = document.createElement('div');
         badge.id = DETAIL_BADGE_ID;
-        badge.textContent = `已访问：${id}`;
+        badge.textContent = badgeText;
         badge.style.position = 'fixed';
         badge.style.top = '10px';
         badge.style.right = '10px';
@@ -172,6 +176,7 @@
         badge.style.borderRadius = '4px';
         badge.style.boxShadow = '0 2px 8px rgba(0, 0, 0, 0.25)';
         badge.style.fontWeight = 'bold';
+        badge.style.whiteSpace = 'pre-line';
         document.body.appendChild(badge);
     }
 

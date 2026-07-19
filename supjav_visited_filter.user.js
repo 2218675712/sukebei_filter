@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SupJAV Visited Item Filter
 // @namespace    http://tampermonkey.net/
-// @version      1.5
+// @version      1.6
 // @description  Record visited SupJAV detail pages and hide or show visited items on list pages
 // @author       qisexin
 // @license      MIT
@@ -52,6 +52,7 @@
     let modeButton;
     let queryInput;
     let lastStats = null;
+    let detailPreviousVisitTime = 0;
 
     function getStoredValue(key, defaultValue) {
         if (typeof GM_getValue === 'function') {
@@ -184,10 +185,13 @@
     }
 
     function markVisited(id) {
-        if (!id || isSkippableSlug(id)) return;
+        if (!id || isSkippableSlug(id)) return 0;
+
         const visitedMap = loadVisitedMap();
+        const previousVisitTime = Number(visitedMap[id]) || 0;
         visitedMap[id] = Date.now();
         saveVisitedMap(visitedMap);
+        return previousVisitTime;
     }
 
     function isVisited(id, visitedMap) {
@@ -270,7 +274,8 @@
 
     function recordDetailPage() {
         if (!isDetailPage()) return;
-        markVisited(getPathSlug(location.pathname));
+
+        detailPreviousVisitTime = markVisited(getPathSlug(location.pathname));
     }
 
     function isSameSiteUrl(url) {
@@ -279,24 +284,26 @@
 
     function showDetailVisitedMark() {
         const existingBadge = document.getElementById(DETAIL_BADGE_ID);
-        if (!isDetailPage() || settings.displayMode !== DISPLAY_MODES.MARK || !document.body) {
+        if (!isDetailPage() || !document.body) {
             if (existingBadge) existingBadge.remove();
             return;
         }
 
         const id = getPathSlug(location.pathname);
-        if (!isVisited(id, loadVisitedMap())) {
+        if (!detailPreviousVisitTime) {
             if (existingBadge) existingBadge.remove();
             return;
         }
+
+        const badgeText = `已访问：${id}\n访问时间：${new Date(detailPreviousVisitTime).toLocaleString()}`;
         if (existingBadge) {
-            existingBadge.textContent = `已访问：${id}`;
+            existingBadge.textContent = badgeText;
             return;
         }
 
         const badge = document.createElement('div');
         badge.id = DETAIL_BADGE_ID;
-        badge.textContent = `已访问：${id}`;
+        badge.textContent = badgeText;
         badge.style.position = 'fixed';
         badge.style.top = '10px';
         badge.style.right = '10px';
@@ -307,6 +314,7 @@
         badge.style.borderRadius = '4px';
         badge.style.boxShadow = '0 2px 8px rgba(0, 0, 0, 0.25)';
         badge.style.fontWeight = 'bold';
+        badge.style.whiteSpace = 'pre-line';
         document.body.appendChild(badge);
     }
 
