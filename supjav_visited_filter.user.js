@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SupJAV Visited Item Filter
 // @namespace    http://tampermonkey.net/
-// @version      1.4
+// @version      1.5
 // @description  Record visited SupJAV detail pages and hide or show visited items on list pages
 // @author       qisexin
 // @license      MIT
@@ -163,7 +163,7 @@
     }
 
     function isDetailPath(pathname) {
-        return /^\/\d+\.html$/i.test(pathname || '');
+        return /^\/(?:[a-z]{2}\/)?\d+\.html$/i.test(pathname || '');
     }
 
     function isSkippableSlug(slug) {
@@ -311,7 +311,8 @@
     }
 
     function findItemContainer(link) {
-        return link.closest('article, .post, .item, .movie, .video, .col, .card, li, tr, div') || link;
+        const itemContainer = link.closest('article, .post, .item, .movie, .video, .col, .card, li, tr');
+        return itemContainer || link.closest('div') || link;
     }
 
     function getItemIdFromLink(link) {
