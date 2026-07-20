@@ -1,7 +1,7 @@
 ﻿// ==UserScript==
 // @name         Sukebei Chinese Title Size Filter
 // @namespace    http://tampermonkey.net/
-// @version      7.7
+// @version      7.8
 // @description  保留中文标题和大小过滤，并支持隐藏、显示或标识已访问项
 // @author       qisexin
 // @license      MIT
@@ -106,6 +106,23 @@
 
     function cleanupVisitedRecords() {
         saveVisitedMap(loadVisitedMap());
+    }
+
+    function getVisitedStats() {
+        const visitedMap = loadVisitedMap();
+        return Object.keys(visitedMap).reduce((stats, id) => {
+            stats.count += 1;
+            stats.latestTime = Math.max(stats.latestTime, visitedMap[id] || 0);
+            return stats;
+        }, { count: 0, latestTime: 0 });
+    }
+
+    function showVisitedStats() {
+        const stats = getVisitedStats();
+        const latestText = stats.latestTime ? new Date(stats.latestTime).toLocaleString() : '无';
+        alert(`Sukebei 已访问记录：${stats.count} 条
+最近访问：${latestText}
+自动清理：超过 ${VISITED_MAX_AGE_DAYS} 天`);
     }
 
     function getTorrentIdFromPath(pathname) {
@@ -573,6 +590,7 @@
         modeButton = createButton('', '#FF9800');
         queryInput = createQueryInput('ID 或详情页链接');
         const queryButton = createButton('查询', '#2196F3');
+        const statsButton = createButton('查看统计', '#2196F3');
         clearVisitedButton = createButton('清空记录', '#607D8B');
         applyButton.title = '应用最小大小，输入框内可按 Enter';
         clearVisitedButton.title = '危险操作：清空全部已访问记录';
@@ -589,6 +607,7 @@
         queryInput.addEventListener('keydown', event => {
             if (event.key === 'Enter') queryVisitedRecord();
         });
+        statsButton.addEventListener('click', showVisitedStats);
         clearVisitedButton.addEventListener('click', clearAllVisitedRecords);
 
         panel.appendChild(statusText);
@@ -599,6 +618,7 @@
         panel.appendChild(document.createElement('br'));
         panel.appendChild(showAllButton);
         panel.appendChild(modeButton);
+        panel.appendChild(statsButton);
         panel.appendChild(document.createElement('br'));
         panel.appendChild(document.createElement('br'));
         panel.appendChild(queryInput);
